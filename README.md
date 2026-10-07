@@ -1,58 +1,102 @@
-# MedLeaf Voice
+# MedLeaf Voice (MLV)
 
-A voice-first medicine leaflet reader. Upload a leaflet (PDF or photo), ask questions out loud, and get answers that come **only from your document**, with the exact source lines shown and the answer read aloud.
+A voice-first intelligent medicine leaflet & official drug label assistant. Take a photo of a medicine box, speak or type its name, ask questions out loud, and receive instant, grounded answers **sourced strictly from official medicine labels**, with exact line citations and spoken audio playback.
 
 ```
-Upload PDF/image -> PyMuPDF text / Tesseract OCR -> clean + chunk -> sentence-transformers embeddings -> ChromaDB
-Voice question -> Whisper -> retrieve top passages -> LLM answers strictly from them -> sources + SpeechSynthesis
+[ Photo of box / Voice / Text ] ──> Medicine Identification & OCR (Tesseract / LLM)
+                                          │
+                                          ▼
+                         DailyMed / OpenFDA Official Label Fetch
+                                          │
+                                          ▼
+                       Sentence-Aware Chunking & ChromaDB Vectorstore
+                                          │
+ [ Voice Question ] ──> Whisper STT ──> RAG Retrieval ──> Grounded Generation (LLM)
+                                                                 │
+                                                                 ▼
+                                                  Exact Sources + Speech Synthesis
 ```
 
-## Stack
+---
 
-| Layer | Tech |
+## ✨ Features
+
+- 📷 **Instant Medicine Identification**: Take a photo of a medicine box/wrapper, say its name out loud, or type it (e.g. *Dolo 650*, *Paracetamol*). MedLeaf Voice extracts the active ingredient using Tesseract OCR and LLM entity recognition.
+- 💊 **Official Drug Label Retrieval**: Automatically fetches verified, up-to-date drug labels from official registries (FDA / DailyMed).
+- 🎙️ **Voice & Text Interaction**: Ask questions using your microphone or keyboard. Voice input is transcribed in real-time with local `faster-whisper`.
+- 🛡️ **Grounded & Safe Answers**: Answers are generated strictly from indexed label sections. Built-in safety screen checks for emergency symptoms and dose modification risks.
+- 🔊 **Text-to-Speech (TTS)**: Listens and speaks replies out loud with interactive Play, Replay, and Stop controls.
+- 🎨 **Modern Aesthetic UI**: Includes a centered **MLV** logo emblem, glassmorphic frosted cards, radiant glowing mic controls, and a medical herbal backdrop.
+
+---
+
+## 🛠️ Technology Stack
+
+| Layer | Technology |
 |---|---|
-| Frontend | React, Vite, Tailwind CSS |
-| Backend | Python, FastAPI |
-| PDF text | PyMuPDF (scanned pages fall back to OCR) |
-| Image OCR | Tesseract via pytesseract |
-| Embeddings / store | sentence-transformers (`all-MiniLM-L6-v2`) + ChromaDB |
-| Speech-to-text | Whisper (`faster-whisper`, runs locally on CPU) |
-| LLM | Anthropic API (key in environment variable) |
-| Text-to-speech | Browser SpeechSynthesis |
+| **Frontend** | React 18, Vite, Tailwind CSS |
+| **Backend** | Python 3.10+, FastAPI, Uvicorn |
+| **OCR & Vision** | Tesseract OCR (`pytesseract`), PyMuPDF |
+| **Embeddings & Vector Database** | `sentence-transformers` (`all-MiniLM-L6-v2`), ChromaDB |
+| **Speech-to-Text (STT)** | `faster-whisper` (runs locally on CPU) |
+| **LLM Provider** | Groq / Anthropic API (configured via `.env`) |
+| **Text-to-Speech (TTS)** | Web SpeechSynthesis API |
+| **Drug Label Data** | DailyMed / OpenFDA APIs |
 
-## Prerequisites
+---
 
-- Python 3.10+ and Node.js 18+
-- **Tesseract OCR** (only needed for photos and scanned PDFs; text PDFs work without it)
-  - macOS: `brew install tesseract`
-  - Ubuntu/Debian: `sudo apt install tesseract-ocr`
-  - Windows: install from https://github.com/UB-Mannheim/tesseract/wiki, then set `TESSERACT_CMD` in `backend/.env`
-- An Anthropic API key from https://console.anthropic.com/
-- Chrome or Edge recommended (best microphone and speech support). Microphone access works on `localhost` without HTTPS.
+## 📋 Prerequisites
 
-## Setup
+- **Python**: 3.10 or higher
+- **Node.js**: 18.x or higher
+- **Tesseract OCR**: (Required for photo recognition)
+  - **macOS**: `brew install tesseract`
+  - **Ubuntu / Debian**: `sudo apt install tesseract-ocr`
+  - **Windows**: Install from [UB-Mannheim Tesseract Wiki](https://github.com/UB-Mannheim/tesseract/wiki) and ensure `TESSERACT_CMD` is set in `backend/.env` if not in system PATH.
+- **LLM API Key**: Groq or Anthropic API key.
+- **Browser**: Google Chrome or Microsoft Edge recommended for full microphone and speech synthesis support.
 
-### 1. Backend
+---
+
+## 🚀 Quick Start & Setup
+
+### 1. Backend Setup
 
 ```bash
 cd backend
+
+# Create and activate virtual environment
 python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+# On Windows:
+.venv\Scripts\activate
+# On macOS/Linux:
+source .venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
-cp .env.example .env               # Windows: copy .env.example .env
+
+# Create environment configuration file
+copy .env.example .env     # Windows
+# cp .env.example .env     # macOS/Linux
 ```
 
-Open `backend/.env` and set `ANTHROPIC_API_KEY=...`.
+Open `backend/.env` and configure your API key:
+```env
+GROQ_API_KEY=your_api_key_here
+# or ANTHROPIC_API_KEY=your_key_here
+```
 
-Run it:
-
+Start the FastAPI server:
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
+> **Note**: On initial startup, the embedding model (~90 MB) and Whisper model (~150 MB) will be downloaded and cached locally.
 
-The first start downloads the embedding model (~90 MB). The first voice question downloads the Whisper `base` model (~150 MB). After that everything is cached.
+---
 
-### 2. Frontend
+### 2. Frontend Setup
+
+In a new terminal:
 
 ```bash
 cd frontend
@@ -60,91 +104,85 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. In development Vite proxies `/api` to the backend on port 8000, so no extra configuration is needed. For a deployed build, copy `frontend/.env.example` to `frontend/.env`, set `VITE_API_BASE` to your backend URL, add that origin to `CORS_ORIGINS` in `backend/.env`, and run `npm run build`.
+Open your browser and navigate to **`http://localhost:5173`**.
 
-## Configuration (`backend/.env`)
+---
+
+## ⚙️ Configuration Options (`backend/.env`)
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | none | Required for answers |
-| `LLM_MODEL` | `claude-sonnet-5-5` | Any Claude model id your key can use |
-| `WHISPER_MODEL` | `base` | `tiny` is faster, `small` is more accurate |
-| `WHISPER_LANGUAGE` | `en` | Leave empty to auto-detect |
-| `TESSERACT_CMD` | empty | Path to the tesseract binary if not on PATH |
-| `OCR_LANG` | `eng` | Tesseract language pack |
-| `TOP_K` | `5` | Passages retrieved per question |
-| `MAX_DISTANCE` | `1.0` | Cosine-distance cut-off; lower is stricter |
-| `MAX_UPLOAD_MB` | `20` | Per-file size limit |
+| `GROQ_API_KEY` | empty | API key for LLM generation |
+| `ANTHROPIC_API_KEY` | empty | Alternative LLM API key |
+| `LLM_MODEL` | `llama-3.3-70b-versatile` | Model ID for question answering |
+| `WHISPER_MODEL` | `base` | Speech recognition model size (`tiny`, `base`, `small`) |
+| `WHISPER_LANGUAGE` | `en` | Speech language (leave blank for auto-detect) |
+| `TESSERACT_CMD` | empty | Path to Tesseract binary if not on system PATH |
+| `TOP_K` | `5` | Top passage chunks retrieved per question |
+| `MAX_DISTANCE` | `1.0` | Cosine similarity cut-off threshold |
+| `MAX_UPLOAD_MB` | `20` | File upload size limit |
 
-To use a different LLM provider, only `backend/app/services/llm.py` needs to change (`_complete` is the single call site).
+---
 
-## API
+## 📡 API Reference
 
-| Method | Path | Purpose |
+| Endpoint | Method | Description |
 |---|---|---|
-| GET | `/api/health` | Server, LLM key, and Tesseract status |
-| POST | `/api/upload` | Validate and store files (`session_id`, `files[]`) |
-| POST | `/api/extract/pdf` | Return PyMuPDF text per page (stateless helper) |
-| POST | `/api/extract/image` | Return OCR text for an image (stateless helper) |
-| POST | `/api/process` | Extract, clean, chunk, embed, and store in ChromaDB |
-| POST | `/api/transcribe` | Whisper speech-to-text (`audio`) |
-| POST | `/api/ask` | RAG answer with sources (`session_id`, `question`, `history`) |
-| DELETE | `/api/documents/{session}/{doc}` | Remove one leaflet |
-| DELETE | `/api/session/{session}` | Remove all leaflets for a session |
+| `/api/health` | `GET` | Health check for backend, LLM, and Tesseract OCR status |
+| `/api/identify` | `POST` | Identifies medicine brand & active ingredients from text/OCR |
+| `/api/label` | `POST` | Fetches official drug label from DailyMed / OpenFDA |
+| `/api/medicine/load` | `POST` | Loads, chunks, and indexes official drug label into ChromaDB |
+| `/api/transcribe` | `POST` | Converts spoken audio recording into text via Whisper |
+| `/api/ask` | `POST` | RAG endpoint answering questions using indexed label chunks |
+| `/api/extract/image` | `POST` | Helper endpoint for image OCR extraction |
+| `/api/extract/pdf` | `POST` | Helper endpoint for PDF text extraction |
+| `/api/documents/{session}/{doc}` | `DELETE` | Removes a specific medicine document from session |
+| `/api/session/{session}` | `DELETE` | Clears all data for a session |
 
-Interactive docs: http://localhost:8000/docs
+Interactive API documentation is available at **`http://localhost:8000/docs`**.
 
-## How answers stay grounded
+---
 
-1. Follow-ups ("What about children?") are rewritten into standalone questions using the last few turns, so retrieval works.
-2. Only passages within `MAX_DISTANCE` are sent to the LLM. If none qualify, the app answers with the fixed sentence: *"I could not find this information in the uploaded medicine leaflet."* without calling the LLM.
-3. The LLM is told to use only the numbered passages, to treat them as untrusted text, and to return JSON with the exact words it relied on.
-4. Quoted evidence is checked against the passage text. If the quote isn't really in the passage, the UI shows the passage itself instead.
-5. Questions that mention emergencies (chest pain, overdose, swelling of the face, and similar) get a visible warning and a spoken reminder to contact a healthcare professional or emergency service. Questions about starting, stopping, or changing a dose get a note to ask a doctor or pharmacist.
-
-## Project structure
+## 📁 Project Structure
 
 ```
 medleaf-voice/
-  backend/
-    app/
-      main.py              FastAPI routes
-      config.py            Environment settings
-      services/
-        extract.py         PyMuPDF + Tesseract + text cleaning
-        chunking.py        Sentence-aware chunking
-        vectorstore.py     Embeddings + ChromaDB
-        stt.py             Whisper
-        llm.py             Grounded generation
-        safety.py          Disclaimer + question screening
-    requirements.txt
-    .env.example
-  frontend/
-    src/
-      App.jsx              State and workflow
-      api.js               REST client
-      hooks/               useRecorder (mic), useSpeech (TTS)
-      components/          Header, UploadPanel, Conversation, MicDock, icons
-    package.json
-    .env.example
+├── backend/
+│   ├── app/
+│   │   ├── main.py              # FastAPI endpoints & lifecycle
+│   │   ├── config.py            # Environment configurations
+│   │   └── services/
+│   │       ├── drug_label.py    # Official DailyMed/FDA label fetcher
+│   │       ├── medicine.py      # Medicine identification service
+│   │       ├── extract.py       # Tesseract OCR & PyMuPDF extraction
+│   │       ├── chunking.py      # Sentence-aware document chunker
+│   │       ├── vectorstore.py   # Sentence-Transformers & ChromaDB vector DB
+│   │       ├── stt.py           # Whisper Speech-to-Text
+│   │       ├── llm.py           # Grounded RAG answer generator
+│   │       └── safety.py        # Question screening & medical notes
+│   ├── requirements.txt
+│   └── .env.example
+├── frontend/
+│   ├── public/
+│   │   └── medicine_bg.jpg      # Medicine & herbal backdrop image
+│   ├── src/
+│   │   ├── App.jsx              # Main app state & workflow
+│   │   ├── api.js               # API service client
+│   │   ├── components/
+│   │   │   ├── Header.jsx       # Centered header with MLV logo
+│   │   │   ├── MedicineFinder.jsx # Photo, voice & text medicine lookup
+│   │   │   ├── Conversation.jsx # Interactive chat history & TTS controls
+│   │   │   ├── MicDock.jsx      # Glowing microphone dock
+│   │   │   └── icons.jsx        # SVG icons & MLV logo emblem
+│   │   ├── hooks/               # Custom hooks (mic recorder, TTS speech)
+│   │   └── index.css            # Tailwind & glassmorphism custom CSS
+│   ├── package.json
+│   └── vite.config.js
+└── README.md
 ```
 
-## Troubleshooting
+---
 
-- **"Tesseract OCR isn't installed"** banner: install Tesseract (see Prerequisites) or set `TESSERACT_CMD`, then restart the backend.
-- **"LLM API key is missing"** banner: set `ANTHROPIC_API_KEY` in `backend/.env` and restart.
-- **No automatic voice playback**: some browsers block speech until you interact with the page. Press Play on the answer.
-- **Microphone blocked**: click the lock icon in the address bar and allow the microphone. You can also type questions.
-- **Poor OCR on photos**: use a straight-on, well-lit photo where the text fills the frame.
-- **Reset everything**: stop the backend and delete `backend/data/`.
+## ⚠️ Disclaimer
 
-## Demo script
-
-1. Drop in a leaflet PDF and watch it go from Uploading to Reading the text to Ready.
-2. Tap the mic: "What side effects are listed?" The recognized question, answer, source excerpt, and spoken reply appear.
-3. Follow up: "What about children?"
-4. Ask something the leaflet doesn't cover to show the "could not find" response.
-
-## Safety
-
-This application provides information from the uploaded medicine leaflet only. It does not provide medical diagnosis or personalized medical advice. Always follow your doctor or pharmacist's instructions.
+This application provides information extracted from official medicine labels for informational purposes only. It does not provide medical diagnosis or personalized treatment advice. Always consult your doctor or pharmacist before making any medical decisions.
