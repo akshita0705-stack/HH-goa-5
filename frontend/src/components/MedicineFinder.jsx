@@ -10,12 +10,27 @@ const BUSY_TEXT = {
     loading: "Getting the official information",
 };
 
-export default function MedicineFinder({ sessionId, medicines, onLoaded, onRemove }) {
+const siteName = (url) => {
+    try {
+        return new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+        return url;
+    }
+};
+
+export default function MedicineFinder({ sessionId, medicines, activeId, onSelect, onLoaded, onRemove }) {
     const [text, setText] = useState("");
     const [busy, setBusy] = useState("");
     const [error, setError] = useState("");
     const [detected, setDetected] = useState(null);
+    const [nameText, setNameText] = useState("");
+    const [brandText, setBrandText] = useState("");
+    const [strengthText, setStrengthText] = useState("");
+    const [formText, setFormText] = useState("");
     const [ingredientsText, setIngredientsText] = useState("");
+    const [candidates, setCandidates] = useState([]);
+    const [webNote, setWebNote] = useState("");
+    const [webSources, setWebSources] = useState([]);
     const photoRef = useRef(null);
 
     const identify = async (raw) => {
@@ -27,13 +42,29 @@ export default function MedicineFinder({ sessionId, medicines, onLoaded, onRemov
         }
         setError("");
         setDetected(null);
+        setCandidates([]);
+        setWebNote("");
+        setWebSources([]);
         setBusy("identifying");
         try {
             const res = await api.identify(query);
+            setCandidates(res.candidates || []);
+            setWebNote(res.web_note || "");
+            setWebSources(res.web_sources || []);
             if (!res.found) {
-                setError("I couldn't tell which medicine this is. Try typing the name, or use a clearer photo of the box.");
+                // Pre-fill fields with user's query so they can edit directly
+                setDetected({ found: true, confidence: "low" });
+                setNameText(query);
+                setBrandText(query);
+                setStrengthText("");
+                setFormText("");
+                setIngredientsText("");
             } else {
                 setDetected(res);
+                setNameText(res.display_name || res.brand || query);
+                setBrandText(res.brand || "");
+                setStrengthText(res.strength || "");
+                setFormText(res.form || "");
                 setIngredientsText(res.ingredients.join(", "));
             }
         } catch (err) {
@@ -86,19 +117,26 @@ export default function MedicineFinder({ sessionId, medicines, onLoaded, onRemov
     const recorder = useRecorder({ onStop: handleRecorded, onError: setError });
 
     const confirm = async () => {
-        const ingredients = ingredientsText.split(/[,+;]/).map((s) => s.trim()).filter(Boolean);
-        if (!ingredients.length) {
-            setError("Enter at least one active ingredient.");
+        const ingredients = ingredientsText.split(/\s*(?:,|;|\+|&|\/|\band\b)\s*/i).map((s) => s.trim()).filter(Boolean);
+        if (!ingredients.length && !brandText.trim() && !nameText.trim()) {
+            setError("Enter at least the medicine name or active ingredient.");
             return;
         }
         setError("");
         setBusy("loading");
         try {
-            const res = await api.loadMedicine(sessionId, ingredients);
+            const payload = {
+                ingredients,
+                brand: brandText.trim() || null,
+                strength: strengthText.trim() || null,
+                form: formText.trim() || null,
+                name: nameText.trim() || null,
+            };
+            const res = await api.loadMedicine(sessionId, payload);
             if (!res.found) {
-                setError(`I couldn't find official information for ${ingredients.join(", ")}. Try the generic name, for example "paracetamol".`);
+                setError(`I couldn't find official information for ${nameText || ingredients.join(", ")}. Try checking the active ingredient name (e.g. "azelaic acid" or "paracetamol").`);
             } else {
-                onLoaded({ ...res, brand: detected?.brand || null });
+                onLoaded({ ...res, brand: brandText || detected?.brand || null, web_sources: webSources });
                 setDetected(null);
                 setText("");
             }
@@ -119,7 +157,7 @@ export default function MedicineFinder({ sessionId, medicines, onLoaded, onRemov
     return (
         <section aria-labelledby="finder-heading" className="rounded-3xl glass-panel p-5 transition-all">
             <h2 id="finder-heading" className="font-display text-lg font-semibold text-pine">Find a medicine</h2>
-            <p className="mt-1 text-sm text-muted">Take a photo of the box or wrapper, say the name, or type it.</p>
+            <p className="mt-1 text-sm text-muted">Take a photo of the box/tube, say the name, or type it.</p>
 
             <div className="mt-3 grid grid-cols-2 gap-2">
                 <label
@@ -150,14 +188,14 @@ export default function MedicineFinder({ sessionId, medicines, onLoaded, onRemov
             </div>
 
             <form onSubmit={submit} className="mt-2 flex gap-2">
-                <label className="sr-only" htmlFor="medicine-name">Type a medicine name</label>
+                <label className="sr-only" htmlFor="medicine-name">Type a medicine or cream name</label>
                 <input
                     id="medicine-name"
                     value={text}
                     onChange={(e) => setText(e.target.value)}
                     disabled={locked}
                     maxLength={200}
-                    placeholder="Or type, e.g. Dolo 650"
+                    placeholder="e.g. Azelaic acid cream, Risedone 10 mg"
                     className="min-w-0 flex-1 rounded-xl border border-line bg-paper px-3 py-2.5 text-sm text-ink placeholder:text-muted disabled:opacity-60"
                 />
                 <button
@@ -181,23 +219,99 @@ export default function MedicineFinder({ sessionId, medicines, onLoaded, onRemov
 
             {detected && !busy && (
                 <div className="mt-4 rounded-xl border border-fern bg-mint/40 p-4">
-                    <p className="text-sm text-muted">I think this is:</p>
-                    <p className="mt-0.5 font-semibold text-ink">
-                        {detected.brand || detected.ingredients.join(", ")}
-                        {detected.strength ? ` (${detected.strength})` : ""}
-                    </p>
-                    {detected.confidence !== "high" && (
-                        <p className="mt-1 text-sm text-alarm-text">I'm not fully sure. Please check the ingredient below.</p>
+                    <p className="text-sm font-medium text-pine">Confirm Medicine Details</p>
+
+                    {webNote && (
+                        <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs leading-snug text-amber-900">{webNote}</p>
                     )}
-                    <label htmlFor="ingredients" className="mt-3 block text-sm font-medium text-ink">Active ingredient(s)</label>
-                    <input
-                        id="ingredients"
-                        value={ingredientsText}
-                        onChange={(e) => setIngredientsText(e.target.value)}
-                        maxLength={200}
-                        className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2 text-sm text-ink"
-                    />
-                    <p className="mt-1 text-xs text-muted">Fix it if it's wrong. Separate several ingredients with commas.</p>
+                    {webSources.length > 0 && (
+                        <p className="mt-1.5 text-xs text-muted">
+                            Ingredients checked on:{" "}
+                            {webSources.map((u, i) => (
+                                <span key={u}>
+                                    {i > 0 && ", "}
+                                    <a href={u} target="_blank" rel="noreferrer" className="text-fern underline">{siteName(u)}</a>
+                                </span>
+                            ))}
+                        </p>
+                    )}
+                    {candidates.length > 0 && (
+                        <div className="mt-2 space-y-1.5">
+                            <p className="text-xs font-semibold text-pine">Which one is on your pack?</p>
+                            {candidates.map((c) => (
+                                <button
+                                    key={c.brand + c.ingredients.join()}
+                                    type="button"
+                                    onClick={() => {
+                                        setNameText(c.brand);
+                                        setBrandText(c.brand);
+                                        setIngredientsText(c.ingredients.join(", "));
+                                        setCandidates([]);
+                                        setWebNote(`You chose ${c.brand} (${c.ingredients.join(", ")}).`);
+                                    }}
+                                    className="block w-full rounded-lg border border-line bg-white px-3 py-2 text-left text-sm text-ink hover:bg-mint/50"
+                                >
+                                    <span className="font-semibold">{c.brand}</span>
+                                    <span className="text-muted"> &mdash; {c.ingredients.join(", ")}</span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    <div className="mt-3 space-y-2.5">
+                        <div>
+                            <label htmlFor="med-name" className="block text-xs font-semibold text-pine">Medicine / Cream Name</label>
+                            <input
+                                id="med-name"
+                                value={nameText}
+                                onChange={(e) => setNameText(e.target.value)}
+                                maxLength={200}
+                                placeholder="e.g. Azelaic Acid Cream, Risedone Plus"
+                                className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2 text-sm text-ink"
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                            <div>
+                                <label htmlFor="med-strength" className="block text-xs font-semibold text-pine">Strength / Variant</label>
+                                <input
+                                    id="med-strength"
+                                    value={strengthText}
+                                    onChange={(e) => setStrengthText(e.target.value)}
+                                    maxLength={100}
+                                    placeholder="e.g. 5 mg, 10 mg, Plus"
+                                    className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2 text-sm text-ink"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="med-form" className="block text-xs font-semibold text-pine">Form (Cream/Gel/Tablet)</label>
+                                <input
+                                    id="med-form"
+                                    value={formText}
+                                    onChange={(e) => setFormText(e.target.value)}
+                                    maxLength={100}
+                                    placeholder="e.g. cream, gel, tablet"
+                                    className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2 text-sm text-ink"
+                                />
+                            </div>
+                        </div>
+
+                        <div>
+                            <label htmlFor="ingredients" className="block text-xs font-semibold text-pine">Active Ingredient(s)</label>
+                            <input
+                                id="ingredients"
+                                value={ingredientsText}
+                                onChange={(e) => setIngredientsText(e.target.value)}
+                                maxLength={200}
+                                placeholder="e.g. azelaic acid, risperidone"
+                                className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2 text-sm text-ink"
+                            />
+                        </div>
+                    </div>
+
+                    <p className="mt-2 text-xs text-muted">You can edit any field above before fetching official information.</p>
+
                     <div className="mt-3 flex gap-2">
                         <button
                             type="button"
@@ -211,7 +325,7 @@ export default function MedicineFinder({ sessionId, medicines, onLoaded, onRemov
                             onClick={() => setDetected(null)}
                             className="rounded-xl border border-line px-4 py-2 text-sm font-medium text-muted hover:bg-white"
                         >
-                            Not right
+                            Cancel
                         </button>
                     </div>
                 </div>
@@ -220,25 +334,56 @@ export default function MedicineFinder({ sessionId, medicines, onLoaded, onRemov
             {medicines.length > 0 && (
                 <ul className="mt-4 space-y-3">
                     {medicines.map((m) => (
-                        <li key={m.doc_id} className="flex items-start gap-3 rounded-xl border border-line p-3">
-                            <div className="min-w-0 flex-1 text-sm">
-                                <p className="truncate font-medium text-ink" title={m.brand || m.ingredients.join(", ")}>
-                                    {m.brand || m.ingredients.join(", ")}
-                                </p>
-                                <p className="text-muted">Active: {m.ingredients.join(", ")}</p>
+                        <li key={m.doc_id} className={`flex items-start gap-3 rounded-xl border p-3 ${m.doc_id === activeId ? "border-pine bg-mint/50 ring-1 ring-pine" : "border-line"}`}>
+                            <div className="min-w-0 flex-1 cursor-pointer text-sm" onClick={() => onSelect?.(m.doc_id)} title="Open this medicine's chat">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                    <p className="font-semibold text-ink" title={m.display_name || m.brand || m.ingredients.join(", ")}>
+                                        {m.display_name || m.brand || m.ingredients.join(", ")}
+                                    </p>
+                                    {m.form && !((m.display_name || m.brand || "").toLowerCase().includes(m.form.toLowerCase())) && (
+                                        <span className="rounded-md bg-mint px-2 py-0.5 text-xs font-medium text-pine capitalize">
+                                            {m.form}
+                                        </span>
+                                    )}
+                                    {m.strength && !((m.display_name || m.brand || "").toLowerCase().includes(m.strength.toLowerCase())) && (
+                                        <span className="rounded-md bg-fern/10 px-2 py-0.5 text-xs font-medium text-fern">
+                                            {m.strength}
+                                        </span>
+                                    )}
+                                </div>
+                                {m.ingredients?.length > 0 && (
+                                    <p className="mt-0.5 text-muted">Active: {m.ingredients.join(", ")}</p>
+                                )}
                                 <p className="mt-1 flex items-center gap-1.5 font-medium text-pine">
-                                    <CheckIcon width={16} height={16} /> Official label loaded
+                                    <CheckIcon width={16} height={16} /> {m.labels?.length ? "Official label loaded" : "Brand information loaded"}
                                 </p>
-                                {m.source_url && (
-                                    <a href={m.source_url} target="_blank" rel="noreferrer" className="text-xs text-fern underline">
-                                        View the official label
-                                    </a>
+                                {m.web_pages?.length > 0 && (
+                                    <p className="mt-1.5 text-xs text-muted">
+                                        Brand information from (not official labels):{" "}
+                                        {m.web_pages.map((w, i) => (
+                                            <span key={w.url}>
+                                                {i > 0 && ", "}
+                                                <a href={w.url} target="_blank" rel="noreferrer" className="text-fern underline">{w.site}</a>
+                                            </span>
+                                        ))}
+                                    </p>
+                                )}
+                                {m.web_sources?.length > 0 && (
+                                    <p className="mt-1.5 text-xs text-muted">
+                                        Ingredients checked on:{" "}
+                                        {m.web_sources.map((u, i) => (
+                                            <span key={u}>
+                                                {i > 0 && ", "}
+                                                <a href={u} target="_blank" rel="noreferrer" className="text-fern underline">{siteName(u)}</a>
+                                            </span>
+                                        ))}
+                                    </p>
                                 )}
                             </div>
                             <button
                                 type="button"
                                 onClick={() => onRemove(m)}
-                                aria-label={`Remove ${m.brand || m.ingredients.join(", ")}`}
+                                aria-label={`Remove ${m.display_name || m.ingredients.join(", ")}`}
                                 className="rounded-lg p-1.5 text-muted hover:bg-mint hover:text-pine"
                             >
                                 <CloseIcon width={18} height={18} />

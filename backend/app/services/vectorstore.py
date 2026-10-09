@@ -47,8 +47,8 @@ def embed(texts: list[str]) -> list[list[float]]:
     return get_model().encode(texts, normalize_embeddings=True, show_progress_bar=False).tolist()
 
 
-def add_chunks(session_id: str, doc_id: str, source: str, kind: str, pages: list[dict]) -> int:
-    """pages: [{page, chunks: [str]}]. Replaces any earlier chunks for this doc."""
+def add_chunks(session_id: str, doc_id: str, source: str, kind: str, pages: list[dict], note: str = "") -> int:
+    """pages: [{page, chunks: [str], section?, group?}]. Replaces any earlier chunks for this doc."""
     col = _collection(session_id)
     col.delete(where={"doc_id": doc_id})
     ids, docs, metas = [], [], []
@@ -56,7 +56,11 @@ def add_chunks(session_id: str, doc_id: str, source: str, kind: str, pages: list
         for i, chunk in enumerate(p["chunks"]):
             ids.append(f"{doc_id}-{p['page']}-{i}")
             docs.append(chunk)
-            metas.append({"doc_id": doc_id, "source": source, "page": p["page"], "kind": kind})
+            metas.append({
+                "doc_id": doc_id, "source": p.get("source", source), "page": p["page"], "kind": kind,
+                "section": p.get("section", ""), "group": p.get("group", ""), "note": note,
+                "url": p.get("url", ""),
+            })
     if not ids:
         return 0
     for start in range(0, len(ids), 64):
@@ -65,17 +69,32 @@ def add_chunks(session_id: str, doc_id: str, source: str, kind: str, pages: list
                 embeddings=embed(docs[start:end]))
     return len(ids)
 
-
-def count(session_id: str) -> int:
-    return _collection(session_id).count()
-
-
-def query(session_id: str, text: str, k: int) -> list[dict]:
+def count(session_id: str, doc_id: str | None = None) -> int:
+    """Number of stored chunks for the session, or only for one medicine (doc_id)."""
     col = _collection(session_id)
-    total = col.count()
+    if doc_id:
+        return len(col.get(where={"doc_id": doc_id}, include=[])["ids"])
+    return col.count()
+
+
+def query(session_id: str, text: str, k: int, doc_id: str | None = None, sections: list[str] | None = None) -> list[dict]:
+    """Nearest chunks. doc_id = only that medicine; sections = only those label sections."""
+    col = _collection(session_id)
+    total = count(session_id, doc_id)
     if total == 0:
         return []
-    res = col.query(query_embeddings=embed([text]), n_results=min(k, total))
+    conds = []
+    if doc_id:
+        conds.append({"doc_id": doc_id})
+    if sections:
+        conds.append({"section": {"$in": list(sections)}})
+    where = None if not conds else conds[0] if len(conds) == 1 else {"$and": conds}
+    try:
+        res = col.query(query_embeddings=embed([text]), n_results=min(k, total), where=where)
+    except Exception:
+        if sections:
+            return []
+        raise
     out = []
     for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0]):
         out.append({"text": doc, "distance": dist, **meta})

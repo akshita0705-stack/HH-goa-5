@@ -1,12 +1,41 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertIcon, MicIcon, PlayIcon, ReplayIcon, StopIcon } from "./icons";
 
-const SUGGESTIONS = [
+const MED_SUGGESTIONS = [
   "What is this medicine used for?",
   "How do I use it?",
-  "What warnings are mentioned?",
+  "What are the common side effects?",
   "When should I stop using it?",
 ];
+const GENERAL_SUGGESTIONS = [
+  "I have a headache since morning. What should I do?",
+  "How can I lower my blood pressure naturally?",
+  "What are the signs of dehydration?",
+  "When should I worry about a fever?",
+];
+
+const fmt = (ms) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);
+
+// Live stopwatch shown while an answer is being looked up.
+function Elapsed({ since }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 100);
+    return () => clearInterval(t);
+  }, []);
+  return <span className="ml-1 tabular-nums text-xs">{fmt(Math.max(0, now - since))}</span>;
+}
+
+function Latency({ m }) {
+  if (m.latencyMs == null) return null;
+  return (
+    <p className="mt-3 text-xs text-muted" aria-label="Response time">
+      {m.sttMs != null && <>Voice to text: {fmt(m.sttMs)} · </>}
+      Answer: {fmt(m.latencyMs)}
+      {m.sttMs != null && <> · Total: {fmt(m.sttMs + m.latencyMs)}</>}
+    </p>
+  );
+}
 
 function Controls({ id, answer, speech }) {
   const speaking = speech.speakingId === id;
@@ -48,6 +77,7 @@ function Answer({ m, speech }) {
     return (
       <p className="flex items-center gap-1 text-muted" role="status">
         Looking up the answer <span className="dot">.</span><span className="dot">.</span><span className="dot">.</span>
+        {m.startedAt && <Elapsed since={m.startedAt} />}
       </p>
     );
   if (m.status === "error")
@@ -62,12 +92,14 @@ function Answer({ m, speech }) {
       )}
       <p className={`text-lg leading-relaxed ${m.found ? "text-ink" : "text-muted"}`}>{m.answer}</p>
       <Controls id={m.id} answer={m.answer} speech={speech} />
+      <Latency m={m} />
       <Sources sources={m.sources} />
     </>
   );
 }
 
-export default function Conversation({ messages, speech, canAsk, onAsk, onClear }) {
+export default function Conversation({ title, hasMedicine, messages, speech, canAsk, onAsk, onClear }) {
+  const SUGGESTIONS = hasMedicine ? MED_SUGGESTIONS : GENERAL_SUGGESTIONS;
   const endRef = useRef(null);
   useEffect(() => {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -77,7 +109,9 @@ export default function Conversation({ messages, speech, canAsk, onAsk, onClear 
   return (
     <section aria-labelledby="chat-heading" className="rounded-3xl glass-panel p-5 transition-all">
       <div className="flex items-center justify-between gap-3">
-        <h2 id="chat-heading" className="font-display text-lg font-semibold text-pine">Conversation</h2>
+        <h2 id="chat-heading" className="min-w-0 truncate font-display text-lg font-semibold text-pine">
+          {title ? `Chat: ${title}` : "Ask the Doctor"}
+        </h2>
         {messages.length > 0 && (
           <button type="button" onClick={onClear} className="text-sm font-medium text-muted hover:text-alarm-text">
             Clear conversation
@@ -88,12 +122,12 @@ export default function Conversation({ messages, speech, canAsk, onAsk, onClear 
       {messages.length === 0 ? (
         <div className="py-8">
           <p className="max-w-md font-display text-2xl font-semibold leading-snug text-pine">
-            {canAsk ? "Ask anything about this medicine." : "Find a medicine to begin."}
+            {hasMedicine ? `Ask the doctor anything about ${title || "this medicine"}.` : "Hello, I'm your MedLeaf Doctor. How can I help?"}
           </p>
           <p className="mt-2 max-w-md text-muted">
-            {canAsk
-              ? "Answers come only from the official label, with the exact lines shown so you can check them. Follow-ups like “What about children?” work too."
-              : "Take a photo of the box, say the medicine name, or type it. Once it's ready, tap the microphone and ask your question."}
+            {hasMedicine
+              ? "I'll use the official label for this medicine and add my medical knowledge. Follow-ups like \u201cWhat about children?\u201d work too."
+              : "Ask me any health question by typing or tapping the microphone. You can also add a medicine on the left so I can answer from its label."}
           </p>
           <div className="mt-5 flex flex-wrap gap-2">
             {SUGGESTIONS.map((s) => (

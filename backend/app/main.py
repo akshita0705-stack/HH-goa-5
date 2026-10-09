@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app import config
-from app.services import chunking, drug_label, extract, llm, medicine, safety, stt, vectorstore
+from app.services import chunking, drug_label, extract, indian_sources, intents, llm, medicine, safety, stt, vectorstore
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("medleaf")
@@ -207,6 +207,7 @@ class AskRequest(BaseModel):
     session_id: str
     question: str
     history: list[Turn] = []
+    doc_id: str | None = None  # the medicine this chat belongs to; searches only that label
 
 
 @app.post("/api/ask")
@@ -218,36 +219,44 @@ def ask(req: AskRequest):
         raise HTTPException(400, "Please ask a question.")
     if len(question) > 500:
         raise HTTPException(400, "That question is too long. Keep it under 500 characters.")
-    try:
-        if vectorstore.count(req.session_id) == 0:
-            raise HTTPException(409, "Find a medicine first, then ask your question.")
-    except HTTPException:
-        raise
-    except Exception:
-        log.exception("Vector store unavailable")
-        raise HTTPException(500, "The medicine information is unavailable. Try finding the medicine again.")
+    has_label = False
+    if req.doc_id:
+        _doc_dir(req.session_id, req.doc_id)  # validates the id format
+        try:
+            has_label = vectorstore.count(req.session_id, req.doc_id) > 0
+        except Exception:
+            log.exception("Vector store unavailable")  # fall back to a general doctor answer
 
     history = [t.model_dump() for t in req.history[-4:]]
     try:
         standalone = llm.rewrite_question(question, history)
-        try:
-            hits = vectorstore.query(req.session_id, standalone, config.TOP_K)
-        except Exception:
-            log.exception("Retrieval failed")
-            raise HTTPException(500, "Searching the medicine information failed. Try again.")
-        passages = [h for h in hits if h["distance"] <= config.MAX_DISTANCE]
-        result = (
-            llm.answer(question, standalone, passages, history)
-            if passages
-            else {"found": False, "answer": safety.NOT_FOUND, "evidence": []}
-        )
+        passages: list[dict] = []
+        if has_label:
+            try:
+                wanted = intents.sections_for(standalone)
+                targeted = (
+                    vectorstore.query(req.session_id, standalone, 4, req.doc_id, sections=wanted) if wanted else []
+                )
+                general = vectorstore.query(req.session_id, standalone, 3 if targeted else config.TOP_K, req.doc_id)
+            except Exception:
+                log.exception("Retrieval failed")
+                targeted, general = [], []
+            seen_text = set()
+            for h, is_targeted in [(h, True) for h in targeted] + [(h, False) for h in general]:
+                if h["text"] in seen_text or (not is_targeted and h["distance"] > config.MAX_DISTANCE):
+                    continue
+                seen_text.add(h["text"])
+                passages.append(h)
+            passages = passages[:7]
+        # Doctor mode: always answer. Label passages are used as facts when they exist.
+        result = llm.doctor_answer(question, standalone, passages, history)
     except llm.MissingKeyError as exc:
         raise HTTPException(503, str(exc)) from exc
     except llm.LLMError as exc:
         raise HTTPException(502, str(exc)) from exc
 
     found = result["found"]
-    answer = (result["answer"] if found else safety.NOT_FOUND).replace("*", "").strip() or safety.NOT_FOUND
+    answer = result["answer"].replace("*", "").strip() or safety.NOT_FOUND
 
     sources: list[dict] = []
     if found:
@@ -262,14 +271,14 @@ def ask(req: AskRequest):
             if (idx, excerpt) not in seen:
                 seen.add((idx, excerpt))
                 sources.append(_source(p, excerpt))
-        if not sources:  # model gave no usable evidence: show the closest passages instead
+        if not sources and result.get("used_label") and passages:  # label used but no usable quote: show closest passages
             sources = [_source(p, _snippet(p["text"])) for p in passages[:2]]
     sources = sources[:4]
 
     emergency = safety.needs_emergency_note(question)
     if emergency:
         answer += " " + safety.EMERGENCY_NOTE
-    if safety.asks_dose_change(question):
+    if has_label and safety.asks_dose_change(question):
         answer += " " + safety.DOSE_CHANGE_NOTE
 
     return {"answer": answer, "found": found, "emergency": emergency,
@@ -277,8 +286,14 @@ def ask(req: AskRequest):
 
 
 def _source(p: dict, excerpt: str) -> dict:
-    label = f"{p['source']}, page {p['page']}" if p["kind"] == "pdf" else f"{p['source']} (image)"
-    return {"label": label, "source": p["source"], "page": p["page"], "kind": p["kind"], "excerpt": excerpt}
+    section = p.get("section") or ""
+    if section:
+        who = f"{p['group']} \u2014 " if p.get("group") else ""
+        label = f"{p['source']} \u2014 {who}{section}"
+    else:
+        label = f"{p['source']}, page {p['page']}" if p["kind"] == "pdf" else f"{p['source']} (image)"
+    return {"label": label, "source": p["source"], "page": p["page"], "kind": p["kind"], "excerpt": excerpt,
+            "url": p.get("url") or None}
 
 
 @app.delete("/api/documents/{session_id}/{doc_id}")
@@ -315,54 +330,123 @@ def identify_medicine(req: IdentifyRequest):
 
 
 class LabelRequest(BaseModel):
-    ingredients: list[str] = Field(min_length=1, max_length=5)
+    ingredients: list[str] = Field(default=[], max_length=5)
+    brand: str | None = None
+    strength: str | None = None
+    form: str | None = None
+    name: str | None = None
 
 
 @app.post("/api/label")
 def get_label(req: LabelRequest):
     """Fetch the official drug label for the given active ingredient(s)."""
     try:
-        return drug_label.fetch_label(req.ingredients)
+        return drug_label.fetch_label(
+            ingredients=req.ingredients,
+            brand=req.brand,
+            strength=req.strength,
+            form=req.form,
+            display_name=req.name,
+        )
     except drug_label.LabelError as exc:
         raise HTTPException(502, str(exc)) from exc
+
+
 class LoadMedicineRequest(BaseModel):
     session_id: str
-    ingredients: list[str] = Field(min_length=1, max_length=5)
+    ingredients: list[str] = Field(default=[], max_length=5)
+    brand: str | None = None
+    strength: str | None = None
+    form: str | None = None
+    name: str | None = None
 
 
 @app.post("/api/medicine/load")
 def load_medicine(req: LoadMedicineRequest):
-    """Fetch the official label for the ingredient(s) and store it so /api/ask can answer from it."""
+    """Fetch the best official label(s) for the medicine and store them so /api/ask can answer from them."""
     _session(req.session_id)
     try:
-        label = drug_label.fetch_label(req.ingredients)
+        res = drug_label.fetch_labels(
+            ingredients=req.ingredients,
+            brand=req.brand,
+            strength=req.strength,
+            form=req.form,
+            display_name=req.name,
+        )
     except drug_label.LabelError as exc:
         raise HTTPException(502, str(exc)) from exc
-    if not label["found"]:
-        return {"found": False, "ingredients": label["ingredients"]}
+    # Brands sold outside the US are not in the FDA database: also read the brand's own page on pharmacy sites.
+    web_pages = []
+    if (req.brand or "").strip() and res.get("brand_not_in_us", True):
+        try:
+            web_pages = indian_sources.fetch_pages(req.brand.strip(), res["ingredients"])
+        except Exception:
+            log.exception("Indian brand lookup failed")
+    if not res["found"] and not web_pages:
+        return {"found": False, "ingredients": res["ingredients"], "notes": res["notes"]}
+    if web_pages:
+        res["notes"].append(
+            "Information for this brand also comes from pharmacy websites (" + ", ".join(p["site"] for p in web_pages) +
+            "). They are not official labels, so check with your doctor or pharmacist."
+        )
+
+    display_title = req.name or res.get("display_name") or (req.brand or "").strip()
+    labels = res.get("labels", [])
+    note = f"The user's product: {display_title}"
+    if res.get("form"):
+        note += f", form {res['form']}"
+    if res.get("strength"):
+        note += f", strength {res['strength']}"
+    if labels:
+        note += ". Official label used: " + "; ".join(l["title"] for l in labels) + "."
+    if res["notes"]:
+        note += " " + " ".join(res["notes"])
 
     pages = []
-    for n, (title, text) in enumerate(label["sections"].items(), start=1):
-        chunks = [f"{title}: {c}" for c in chunking.chunk_text(text)]
-        if chunks:
-            pages.append({"page": n, "chunks": chunks})
+    n = 0
+    for label in labels:
+        prefix = f"{label['group'].title()} \u2014 " if label["group"] else ""
+        for title, text in label["sections"].items():
+            chunks = [f"{prefix}{title}: {c}" for c in chunking.chunk_text(text)]
+            if chunks:
+                n += 1
+                pages.append({"page": n, "chunks": chunks, "section": title, "group": label["group"] or ""})
 
-    source = "Official FDA label for " + ", ".join(label["ingredients"])
+    for wp in web_pages:
+        chunks = chunking.chunk_text(wp["text"])
+        if chunks:
+            n += 1
+            pages.append({"page": n, "chunks": chunks, "section": "Brand information", "group": "",
+                          "source": f"Web page: {wp['site']}", "url": wp["url"]})
+
+    if len(labels) == 1:
+        source = f"Official FDA label: {labels[0]['title']}"
+    elif labels:
+        source = "Official FDA labels: " + ", ".join(l["group"] or l["title"] for l in labels)
+    else:
+        source = "Web page: " + ", ".join(p["site"] for p in web_pages)
     doc_id = uuid.uuid4().hex
     try:
-        total = vectorstore.add_chunks(req.session_id, doc_id, source, "pdf", pages)
+        total = vectorstore.add_chunks(req.session_id, doc_id, source, "pdf", pages, note=note[:900])
     except Exception:
         log.exception("Storing the drug label failed")
         raise HTTPException(500, "Could not store the medicine information. Try again.")
     if total == 0:
-        return {"found": False, "ingredients": label["ingredients"]}
+        return {"found": False, "ingredients": res["ingredients"], "notes": res["notes"]}
     return {
         "found": True,
         "doc_id": doc_id,
         "chunks": total,
         "source": source,
-        "label_name": label["label_name"],
-        "manufacturer": label["manufacturer"],
-        "source_url": label["source_url"],
-        "ingredients": label["ingredients"],
+        "display_name": display_title,
+        "brand": res.get("brand"),
+        "strength": res.get("strength"),
+        "form": res.get("form"),
+        "label_name": labels[0]["label_name"] if labels else None,
+        "manufacturer": labels[0]["manufacturer"] if labels else None,
+        "source_url": labels[0]["source_url"] if labels else None,
+        "labels": [{"title": l["title"], "url": l["source_url"]} for l in labels],
+        "web_pages": [{"site": p["site"], "url": p["url"]} for p in web_pages],
+        "notes": res["notes"],
+        "ingredients": res["ingredients"],
     }

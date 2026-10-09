@@ -2,9 +2,8 @@
 import re
 
 DISCLAIMER = (
-    "This application provides information from official medicine labels only. "
-    "It does not provide medical diagnosis or personalized medical advice. "
-    "Always follow your doctor or pharmacist's instructions."
+    "MedLeaf Doctor gives general medical guidance, like a doctor would, but it is an AI and cannot examine you. "
+    "It is not a substitute for a visit to a real doctor. In an emergency, call your local emergency number."
 )
 NOT_FOUND = "This label doesn't cover that. Try asking about its uses, directions, warnings, or when to stop using it."
 EMERGENCY_NOTE = (

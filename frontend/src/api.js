@@ -55,11 +55,15 @@ export const api = {
 
   identify: (text) => request("/api/identify", json({ text })),
 
-  loadMedicine: (sessionId, ingredients) =>
-    request("/api/medicine/load", json({ session_id: sessionId, ingredients })),
+  loadMedicine: (sessionId, payload) => {
+    const body = typeof payload === "object" && !Array.isArray(payload)
+      ? { session_id: sessionId, ...payload }
+      : { session_id: sessionId, ingredients: payload };
+    return request("/api/medicine/load", json(body));
+  },
 
-  ask: (sessionId, question, history) =>
-    request("/api/ask", json({ session_id: sessionId, question, history })),
+  ask: (sessionId, question, history, docId) =>
+    request("/api/ask", json({ session_id: sessionId, question, history, doc_id: docId })),
 
   removeDocument: (sessionId, docId) =>
     request(`/api/documents/${sessionId}/${docId}`, { method: "DELETE" }),
