@@ -1,30 +1,31 @@
 # MedLeaf Voice (MLV)
 
-A voice-first intelligent medicine leaflet & official drug label assistant. Take a photo of a medicine box, speak or type its name, ask questions out loud, and receive instant, grounded answers **sourced strictly from official medicine labels**, with exact line citations and spoken audio playback.
+A voice-first AI doctor and medicine label assistant. Ask any health question by voice or text and get a clear, consultation-style answer from **MedLeaf Doctor**. You can also take a photo of a medicine box or type its name: the doctor then uses that medicine's **official label as its most trusted source**, shows the exact label lines it relied on, and reads the answer aloud.
 
 ```
 [ Photo of box / Voice / Text ] ──> Medicine Identification & OCR (Tesseract / LLM)
                                           │
                                           ▼
-                         DailyMed / OpenFDA Official Label Fetch
+                         DailyMed / OpenFDA Official Label Fetch (optional)
                                           │
                                           ▼
                        Sentence-Aware Chunking & ChromaDB Vectorstore
                                           │
- [ Voice Question ] ──> Whisper STT ──> RAG Retrieval ──> Grounded Generation (LLM)
+ [ Voice Question ] ──> Whisper STT ──> RAG Retrieval (if a medicine is loaded) ──> Doctor-style Generation (LLM)
                                                                  │
                                                                  ▼
-                                                  Exact Sources + Speech Synthesis
+                                                  Label Sources (when used) + Speech Synthesis
 ```
 
 ---
 
 ## ✨ Features
 
+- 🩺 **Ask the Doctor (new)**: Ask any health question, with or without a medicine loaded. Answers are written the way a caring doctor speaks in a consultation: a direct answer first, the most likely explanations, practical home care and over-the-counter guidance, red-flag symptoms that need urgent care, and sometimes one follow-up question. Replies are in plain language and in the language you used.
 - 📷 **Instant Medicine Identification**: Take a photo of a medicine box/wrapper, say its name out loud, or type it (e.g. *Dolo 650*, *Paracetamol*). MedLeaf Voice extracts the active ingredient using Tesseract OCR and LLM entity recognition.
 - 💊 **Official Drug Label Retrieval**: Automatically fetches verified, up-to-date drug labels from official registries (FDA / DailyMed).
 - 🎙️ **Voice & Text Interaction**: Ask questions using your microphone or keyboard. Voice input is transcribed in real-time with local `faster-whisper`.
-- 🛡️ **Grounded & Safe Answers**: Answers are generated strictly from indexed label sections. Built-in safety screen checks for emergency symptoms and dose modification risks.
+- 🛡️ **Label-Backed & Safe Answers**: When a medicine is loaded, its official label is treated as the most reliable source. Doses, ages, and warnings follow the label exactly, and the label lines used are shown under the answer. If no label is loaded, the doctor answers from general medical knowledge and no sources are shown. A safety screen adds an emergency note for serious symptoms, and for a loaded medicine it adds a note when you ask about changing a dose. The doctor will not give a definite diagnosis and will not tell you to start, stop, or change a prescription dose on your own.
 - 🔊 **Text-to-Speech (TTS)**: Listens and speaks replies out loud with interactive Play, Replay, and Stop controls.
 - 🎨 **Modern Aesthetic UI**: Includes a centered **MLV** logo emblem, glassmorphic frosted cards, radiant glowing mic controls, and a medical herbal backdrop.
 
@@ -42,6 +43,23 @@ A voice-first intelligent medicine leaflet & official drug label assistant. Take
 | **LLM Provider** | Groq / Anthropic API (configured via `.env`) |
 | **Text-to-Speech (TTS)** | Web SpeechSynthesis API |
 | **Drug Label Data** | DailyMed / OpenFDA APIs |
+
+---
+
+---
+
+## 🩺 How Doctor Mode Works
+
+| Situation | What happens |
+|---|---|
+| No medicine selected | You are in the general **Ask the Doctor** chat. The question is answered from general medical knowledge. |
+| Medicine selected | Relevant label sections are retrieved and given to the doctor as the most trusted facts. General medical knowledge is added around them. If the two differ, the label wins and the doctor says so. |
+| Serious symptoms mentioned | An emergency note is added to the answer. |
+| Asking to start, stop, or change a dose (medicine selected) | A note tells you to confirm with your doctor or pharmacist. |
+
+The doctor's behaviour is controlled by the `DOCTOR_SYSTEM` prompt in `backend/app/services/llm.py`. Edit it to change the tone, length, or how cautious the advice is.
+
+> MedLeaf Doctor is an AI. It cannot examine you and does not replace a visit to a real doctor.
 
 ---
 
@@ -133,7 +151,7 @@ Open your browser and navigate to **`http://localhost:5173`**.
 | `/api/label` | `POST` | Fetches official drug label from DailyMed / OpenFDA |
 | `/api/medicine/load` | `POST` | Loads, chunks, and indexes official drug label into ChromaDB |
 | `/api/transcribe` | `POST` | Converts spoken audio recording into text via Whisper |
-| `/api/ask` | `POST` | RAG endpoint answering questions using indexed label chunks |
+| `/api/ask` | `POST` | Doctor-style answer. `doc_id` is optional: send it to ground the answer in that medicine's label, or omit it for a general health question |
 | `/api/extract/image` | `POST` | Helper endpoint for image OCR extraction |
 | `/api/extract/pdf` | `POST` | Helper endpoint for PDF text extraction |
 | `/api/documents/{session}/{doc}` | `DELETE` | Removes a specific medicine document from session |
@@ -158,7 +176,7 @@ medleaf-voice/
 │   │       ├── chunking.py      # Sentence-aware document chunker
 │   │       ├── vectorstore.py   # Sentence-Transformers & ChromaDB vector DB
 │   │       ├── stt.py           # Whisper Speech-to-Text
-│   │       ├── llm.py           # Grounded RAG answer generator
+│   │       ├── llm.py           # Doctor-style answer generator (DOCTOR_SYSTEM prompt)
 │   │       └── safety.py        # Question screening & medical notes
 │   ├── requirements.txt
 │   └── .env.example
@@ -166,12 +184,12 @@ medleaf-voice/
 │   ├── public/
 │   │   └── medicine_bg.jpg      # Medicine & herbal backdrop image
 │   ├── src/
-│   │   ├── App.jsx              # Main app state & workflow
+│   │   ├── App.jsx              # Main app state & workflow (includes general doctor chat)
 │   │   ├── api.js               # API service client
 │   │   ├── components/
 │   │   │   ├── Header.jsx       # Centered header with MLV logo
 │   │   │   ├── MedicineFinder.jsx # Photo, voice & text medicine lookup
-│   │   │   ├── Conversation.jsx # Interactive chat history & TTS controls
+│   │   │   ├── Conversation.jsx # Chat history, starter questions & TTS controls
 │   │   │   ├── MicDock.jsx      # Glowing microphone dock
 │   │   │   └── icons.jsx        # SVG icons & MLV logo emblem
 │   │   ├── hooks/               # Custom hooks (mic recorder, TTS speech)
@@ -185,4 +203,4 @@ medleaf-voice/
 
 ## ⚠️ Disclaimer
 
-This application provides information extracted from official medicine labels for informational purposes only. It does not provide medical diagnosis or personalized treatment advice. Always consult your doctor or pharmacist before making any medical decisions.
+MedLeaf Doctor gives general medical guidance for informational purposes only. It is an AI and cannot examine you, diagnose you, or replace a real doctor or pharmacist. Always consult a qualified healthcare professional before making any medical decision. In an emergency, call your local emergency number right away.
